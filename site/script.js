@@ -33,7 +33,8 @@ window.addEventListener('scroll', () => {
 });
 
 // Blog rendering
-const POSTS_PER_PAGE = 9;
+const blogLimit = document.getElementById('blogGrid')?.dataset.limit;
+const POSTS_PER_PAGE = blogLimit ? parseInt(blogLimit, 10) : 9;
 let visiblePosts = POSTS_PER_PAGE;
 let currentFilter = 'all';
 let currentSearch = '';
@@ -59,10 +60,18 @@ function getFiltered() {
             p.content.toLowerCase().includes(q)
         );
     }
+    // Sort newest first
+    list = list.slice().sort((a, b) => {
+        const da = a.date || '';
+        const db = b.date || '';
+        if (da !== db) return db.localeCompare(da);
+        return (b.id || 0) - (a.id || 0);
+    });
     return list;
 }
 
 function renderBlog() {
+    if (!blogGrid) return;
     const filtered = getFiltered();
     const toShow = filtered.slice(0, visiblePosts);
 
@@ -84,10 +93,20 @@ function renderBlog() {
         return;
     }
 
-    blogGrid.innerHTML = toShow.map((post, idx) => `
+    const todayMs = Date.now();
+    blogGrid.innerHTML = toShow.map((post, idx) => {
+        const postMs = post.date ? new Date(post.date).getTime() : 0;
+        const isNew = postMs && (todayMs - postMs) < 21 * 86400000; // last 3 weeks
+        const dateBadge = post.dateHe
+            ? `<span class="blog-card-date${isNew ? ' is-new' : ''}">${isNew ? '<span class="new-pill">חדש</span> ' : ''}${escapeHtml(post.dateHe)}</span>`
+            : '';
+        return `
         <article class="blog-card" onclick="openBlogModal(${post.id})" style="animation-delay:${idx * 30}ms">
             <div class="blog-card-header">
-                <span class="blog-card-category cat-${post.category}">${post.categoryLabel}</span>
+                <div class="blog-card-meta-row">
+                    <span class="blog-card-category cat-${post.category}">${post.categoryLabel}</span>
+                    ${dateBadge}
+                </div>
                 <h3>${escapeHtml(post.title)}</h3>
                 ${post.subtitle ? `<p class="blog-card-subtitle">${escapeHtml(post.subtitle)}</p>` : ''}
             </div>
@@ -97,10 +116,12 @@ function renderBlog() {
             <div class="blog-card-footer">
                 <span class="read-more">קראו עוד <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></span>
             </div>
-        </article>
-    `).join('');
+        </article>`;
+    }).join('');
 
-    loadMoreBtn.style.display = visiblePosts >= filtered.length ? 'none' : 'inline-flex';
+    if (loadMoreBtn) {
+        loadMoreBtn.style.display = visiblePosts >= filtered.length ? 'none' : 'inline-flex';
+    }
 }
 
 // Filter buttons
@@ -114,10 +135,12 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
     });
 });
 
-loadMoreBtn.addEventListener('click', () => {
-    visiblePosts += POSTS_PER_PAGE;
-    renderBlog();
-});
+if (loadMoreBtn) {
+    loadMoreBtn.addEventListener('click', () => {
+        visiblePosts += POSTS_PER_PAGE;
+        renderBlog();
+    });
+}
 
 // Search with debounce
 let searchTimeout;
@@ -166,6 +189,7 @@ function openBlogModal(id) {
             </button>
             <div class="blog-modal-meta">
                 <span class="blog-card-category cat-${post.category}">${post.categoryLabel}</span>
+                ${post.dateHe ? `<span class="blog-modal-date">${escapeHtml(post.dateHe)}</span>` : ''}
             </div>
             <h2>${escapeHtml(post.title)}</h2>
             ${post.subtitle ? `<p class="blog-modal-subtitle">${escapeHtml(post.subtitle)}</p>` : ''}
@@ -216,8 +240,372 @@ document.querySelectorAll('.section').forEach(section => {
     observer.observe(section);
 });
 
+// Gallery toggle
+let galleryExpanded = false;
+function toggleGallery() {
+    galleryExpanded = !galleryExpanded;
+    const allItems = document.querySelectorAll('.gallery-item');
+    const btn = document.getElementById('galleryToggle');
+
+    allItems.forEach((el, i) => {
+        if (i >= 6) {
+            if (galleryExpanded) {
+                el.style.display = 'block';
+                el.style.animation = `fadeInUp 0.4s ease ${(i - 6) * 35}ms backwards`;
+            } else {
+                el.style.display = 'none';
+                el.style.animation = '';
+            }
+        }
+    });
+
+    if (galleryExpanded) {
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg> הסתר תמונות`;
+    } else {
+        btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg> לכל התמונות`;
+        document.getElementById('social')?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+}
+
+// Gallery lightbox – use event delegation so it works for dynamically shown images
+let lightboxIndex = 0;
+const galleryImages = [];
+
+function initGalleryLightbox() {
+    // Collect all image srcs
+    document.querySelectorAll('.gallery-item img').forEach(img => galleryImages.push(img.src));
+
+    // Event delegation on the grid container
+    const grid = document.getElementById('galleryGrid');
+    if (grid) {
+        grid.addEventListener('click', e => {
+            const item = e.target.closest('.gallery-item');
+            if (!item) return;
+            const items = Array.from(document.querySelectorAll('.gallery-item'));
+            openLightbox(items.indexOf(item));
+        });
+    }
+}
+
+function openLightbox(idx) {
+    lightboxIndex = idx;
+    let lb = document.getElementById('galleryLightbox');
+    if (!lb) {
+        lb = document.createElement('div');
+        lb.id = 'galleryLightbox';
+        lb.className = 'gallery-lightbox';
+        lb.innerHTML = `
+            <div class="lightbox-inner">
+                <img id="lightboxImg" src="" alt="תמונה">
+            </div>
+            <button class="lightbox-close" onclick="closeLightbox()" aria-label="סגור">✕</button>
+            <button class="lightbox-nav lightbox-prev" onclick="lightboxNav(-1)" aria-label="הבא">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+            <button class="lightbox-nav lightbox-next" onclick="lightboxNav(1)" aria-label="הקודם">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <div class="lightbox-counter" id="lightboxCounter"></div>
+        `;
+        document.body.appendChild(lb);
+        lb.addEventListener('click', e => { if (e.target === lb) closeLightbox(); });
+    }
+    updateLightbox();
+    lb.classList.add('active');
+    document.body.style.overflow = 'hidden';
+}
+
+function updateLightbox() {
+    const img = document.getElementById('lightboxImg');
+    const counter = document.getElementById('lightboxCounter');
+    if (img) img.src = galleryImages[lightboxIndex];
+    if (counter) counter.textContent = `${lightboxIndex + 1} / ${galleryImages.length}`;
+}
+
+function lightboxNav(dir) {
+    lightboxIndex = (lightboxIndex + dir + galleryImages.length) % galleryImages.length;
+    updateLightbox();
+}
+
+function closeLightbox() {
+    const lb = document.getElementById('galleryLightbox');
+    if (lb) { lb.classList.remove('active'); document.body.style.overflow = ''; }
+}
+
+document.addEventListener('keydown', e => {
+    if (document.getElementById('galleryLightbox')?.classList.contains('active')) {
+        if (e.key === 'ArrowRight') lightboxNav(-1);
+        if (e.key === 'ArrowLeft') lightboxNav(1);
+        if (e.key === 'Escape') closeLightbox();
+    }
+});
+
+// Contact form – sends email via Web3Forms API
+async function submitContactForm(e) {
+    e.preventDefault();
+    const form = document.getElementById('contactForm');
+    const success = document.getElementById('formSuccess');
+    const btn = form.querySelector('.form-submit');
+
+    const name    = document.getElementById('contactName').value.trim();
+    const phone   = document.getElementById('contactPhone').value.trim();
+    const email   = document.getElementById('contactEmail').value.trim();
+    const subject = document.getElementById('contactSubject');
+    const subjectText = subject.options[subject.selectedIndex].text;
+    const message = document.getElementById('contactMessage').value.trim();
+
+    btn.disabled = true;
+    btn.style.opacity = '0.7';
+
+    const payload = {
+        access_key: 'WEB3FORMS_ACCESS_KEY',
+        subject: 'פנייה חדשה מהאתר – ' + (subjectText !== 'בחר נושא...' ? subjectText : 'כללי'),
+        from_name: name,
+        replyto: email || undefined,
+        message: [
+            'שם: ' + name,
+            phone   ? 'טלפון: ' + phone   : '',
+            email   ? 'אימייל: ' + email   : '',
+            'נושא: ' + (subjectText !== 'בחר נושא...' ? subjectText : 'כללי'),
+            '',
+            message
+        ].filter(Boolean).join('\n')
+    };
+
+    try {
+        const res = await fetch('https://api.web3forms.com/submit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            btn.style.display = 'none';
+            success.style.display = 'flex';
+            form.reset();
+            setTimeout(() => {
+                btn.style.display = 'flex';
+                btn.disabled = false;
+                btn.style.opacity = '';
+                success.style.display = 'none';
+            }, 5000);
+        } else {
+            throw new Error(data.message || 'שגיאה');
+        }
+    } catch (err) {
+        console.error('Form error:', err);
+        // Fallback to WhatsApp if email fails
+        const waText = encodeURIComponent(
+            `שלום שניאור, שמי ${name}${phone ? ', מספרי ' + phone : ''}.\n` +
+            `נושא: ${subjectText !== 'בחר נושא...' ? subjectText : 'פנייה כללית'}\n\n${message}`
+        );
+        window.open(`https://wa.me/972543407902?text=${waText}`, '_blank');
+        btn.disabled = false;
+        btn.style.opacity = '';
+    }
+}
+
+// Podcast rendering
+function formatDuration(d) {
+    if (!d) return '';
+    const parts = d.split(':').map(Number);
+    let h = 0, m = 0;
+    if (parts.length === 3) { [h, m] = parts; }
+    else if (parts.length === 2) { [m] = parts; }
+    return h > 0 ? `${h} שעות ${m} דק'` : `${m} דק'`;
+}
+
+function formatTranscript(text) {
+    const lines = text.split('\n');
+    const out = [];
+    let inPara = false;
+    const closePara = () => { if (inPara) { out.push('</p>'); inPara = false; } };
+
+    for (const raw of lines) {
+        const line = raw.trim();
+        const speakerMatch = line.match(/^\*\*(.+?):\*\*\s*$/);
+        if (speakerMatch) {
+            closePara();
+            out.push(`<p class="speaker-label">${escapeHtml(speakerMatch[1])}</p>`);
+        } else if (line === '') {
+            closePara();
+        } else {
+            if (!inPara) { out.push('<p>'); inPara = true; }
+            else { out.push(' '); }
+            out.push(escapeHtml(line));
+        }
+    }
+    closePara();
+    return out.join('');
+}
+
+function renderSyncedTranscript(chunks) {
+    const out = [];
+    let wordIndex = 0;
+    for (const chunk of chunks) {
+        out.push(`<p class="speaker-label">${escapeHtml(chunk.speaker)}</p>`);
+        out.push('<p class="synced-para">');
+        const wordHtml = chunk.words.map(w => {
+            const html = `<span class="sw" data-i="${wordIndex}" data-t="${w.t}" data-d="${w.d}">${escapeHtml(w.w)}</span>`;
+            wordIndex++;
+            return html;
+        }).join(' ');
+        out.push(wordHtml);
+        out.push('</p>');
+    }
+    return out.join('');
+}
+
+async function loadSyncedTranscript(guid, container, audio) {
+    if (container.dataset.synced === '1') return; // already loaded
+    try {
+        const res = await fetch(`transcripts/${guid}.json`);
+        if (!res.ok) return; // fall back to plain text already rendered
+        const data = await res.json();
+        container.innerHTML = renderSyncedTranscript(data.chunks);
+        container.dataset.synced = '1';
+        bindAudioSync(audio, container);
+    } catch (err) {
+        console.warn('Synced transcript not available for', guid, err);
+    }
+}
+
+function bindAudioSync(audio, container) {
+    const words = container.querySelectorAll('.sw');
+    if (!words.length) return;
+
+    let lastActive = -1;
+    const onTime = () => {
+        const t = audio.currentTime;
+        // Binary search for the word covering time t
+        let lo = 0, hi = words.length - 1, idx = -1;
+        while (lo <= hi) {
+            const mid = (lo + hi) >> 1;
+            const wt = parseFloat(words[mid].dataset.t);
+            const wd = parseFloat(words[mid].dataset.d);
+            if (t < wt) hi = mid - 1;
+            else if (t > wt + wd + 0.4) lo = mid + 1;
+            else { idx = mid; break; }
+        }
+        if (idx === -1) {
+            // Find the word just before t
+            for (let i = words.length - 1; i >= 0; i--) {
+                if (parseFloat(words[i].dataset.t) <= t) { idx = i; break; }
+            }
+        }
+        if (idx !== lastActive) {
+            if (lastActive >= 0) words[lastActive].classList.remove('active');
+            if (idx >= 0) {
+                words[idx].classList.add('active');
+                // Auto-scroll the active word into view if it's outside
+                const wRect = words[idx].getBoundingClientRect();
+                const cRect = container.getBoundingClientRect();
+                if (wRect.top < cRect.top + 40 || wRect.bottom > cRect.bottom - 40) {
+                    words[idx].scrollIntoView({block: 'center', behavior: 'smooth'});
+                }
+            }
+            lastActive = idx;
+        }
+    };
+
+    audio.addEventListener('timeupdate', onTime);
+
+    // Click word → seek
+    container.addEventListener('click', (e) => {
+        const span = e.target.closest('.sw');
+        if (!span) return;
+        audio.currentTime = parseFloat(span.dataset.t);
+        if (audio.paused) audio.play();
+    });
+}
+
+function renderPodcastEpisodes() {
+    const list = document.getElementById('episodesList');
+    if (!list || typeof PODCAST_EPISODES === 'undefined') return;
+
+    const limit = parseInt(list.dataset.limit || '0', 10);
+    const compact = list.dataset.compact === '1';
+    const episodes = limit > 0 ? PODCAST_EPISODES.slice(0, limit) : PODCAST_EPISODES;
+
+    list.innerHTML = episodes.map((ep, i) => {
+        const hasTranscript = ep.transcript && ep.transcript.trim().length > 0;
+        const transcriptHtml = compact
+            ? ''
+            : hasTranscript
+            ? `<details class="episode-transcript" data-guid="${escapeHtml(ep.guid)}">
+                <summary>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+                    קרא תמלול
+                </summary>
+                <div class="transcript-body">${formatTranscript(ep.transcript)}</div>
+               </details>`
+            : `<div class="episode-transcript transcript-coming">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                תמלול בהכנה
+               </div>`;
+
+        return `
+        <article class="episode-card">
+            <div class="episode-header">
+                <div class="episode-number">פרק ${PODCAST_EPISODES.length - i}</div>
+                <h3 class="episode-title">${escapeHtml(ep.title)}</h3>
+                <div class="episode-meta">
+                    <span>${escapeHtml(ep.pubDateHe)}</span>
+                    <span aria-hidden="true">·</span>
+                    <span>${formatDuration(ep.duration)}</span>
+                </div>
+            </div>
+            <p class="episode-description">${escapeHtml(ep.description)}</p>
+            <audio controls preload="none" class="episode-audio">
+                <source src="${escapeHtml(ep.audioUrl)}" type="audio/mpeg">
+                הדפדפן שלך לא תומך בנגן אודיו.
+            </audio>
+            ${transcriptHtml}
+        </article>`;
+    }).join('');
+}
+
+function initVideoPosters() {
+    document.querySelectorAll('.video-poster').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const src = btn.dataset.src;
+            if (!src) return;
+            const video = document.createElement('video');
+            video.controls = true;
+            video.autoplay = true;
+            video.playsInline = true;
+            video.preload = 'auto';
+            video.className = 'video-player';
+            const source = document.createElement('source');
+            source.src = src;
+            source.type = 'video/mp4';
+            video.appendChild(source);
+            btn.replaceWith(video);
+        });
+    });
+}
+
+function initPodcastSync() {
+    const cards = document.querySelectorAll('.episode-card');
+    cards.forEach(card => {
+        const details = card.querySelector('details.episode-transcript');
+        const audio = card.querySelector('audio.episode-audio');
+        if (!details || !audio) return;
+        const guid = details.dataset.guid;
+        const body = details.querySelector('.transcript-body');
+        details.addEventListener('toggle', () => {
+            if (details.open) loadSyncedTranscript(guid, body, audio);
+        });
+    });
+}
+
 // Init
 renderBlog();
+initGalleryLightbox();
+renderPodcastEpisodes();
+initPodcastSync();
+initVideoPosters();
 
 // Update stats on home with real count
 const blogCountEl = document.getElementById('blogCount');
